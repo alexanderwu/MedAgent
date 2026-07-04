@@ -2,9 +2,15 @@
 
 ## Prerequisites
 
-Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/).
+Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/) for Python environment management.
 
-With uv, install [`just`](https://github.com/casey/just) with `uv tool install rust-just`.
+Install [`just`](https://github.com/casey/just) task runner with `uv tool install rust-just`.
+
+Navigate to `data/raw/` directory and download MIMIC datasets (e.g., with wget):
+
+- [MIMIC-IV v3.1](https://physionet.org/content/mimiciv/3.1/)
+- [MIMIC-IV Demo v2.2](https://physionet.org/content/mimic-iv-demo/2.2/)
+- [MIMIC-IV-Note v2.2](https://physionet.org/content/mimic-iv-note/2.2/)
 
 ## Setup
 
