@@ -1,3 +1,7 @@
+# Project Specific
+data/raw/physionet.org/
+_AW_*
+
 # Virtual Environments
 .venv/
 venv/
