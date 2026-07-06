@@ -1,0 +1,8 @@
+# MIMIC data — PhysioNet DUA prohibits redistribution
+checkpoints/
+*.pkl
+
+# Large data files
+mimic-iv/
+*.csv.gz
+*.gz
