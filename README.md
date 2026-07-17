@@ -1,9 +1,10 @@
 # MedAgent 🩺🤖
 
 MedAgent is a natural-language clinical-data analysis app for the
-[MIMIC-IV](https://physionet.org/content/mimiciv/) dataset. It uses Gemini to
-inspect a local DuckDB database, propose read-only SQL, and explain the
-results. Every SQL query requires explicit user approval before it runs.
+[MIMIC-IV](https://physionet.org/content/mimiciv/) dataset. It uses an LLM —
+Gemini (cloud) or a local model via Ollama — to inspect a local DuckDB
+database, propose read-only SQL, and explain the results. Every SQL query
+requires explicit user approval before it runs.
 
 The project currently supports the MIMIC-IV demo subset (100 patients) and a
 locally available full MIMIC-IV 3.1 dataset. It includes both a Streamlit chat
@@ -23,7 +24,8 @@ copy .env.example .env  # use cp .env.example .env on macOS/Linux
 ```
 
 Set `GEMINI_API_KEY` in `.env`. `MEDAGENT_MODEL` is optional and defaults to
-`gemini-2.5-flash`.
+`gemini-2.5-flash`. To skip the cloud entirely, see
+[Local LLM (Ollama)](#local-llm-ollama) below — no API key needed.
 
 Then ingest the demo data and launch the app:
 
@@ -55,14 +57,36 @@ Generated databases are stored under `data/duckdb/` and are ignored by Git.
 
 ### How queries work
 
-1. Gemini inspects the local database schema.
+1. The model inspects the local database schema.
 2. It proposes a single `SELECT` (or `WITH ... SELECT`) query and explains its purpose.
 3. You approve or reject the query. Approved queries run locally against a
    read-only DuckDB connection; results are capped at 200 rows.
-4. The result rows are sent to Gemini so it can answer the question. The agent
-   may also render an Altair chart from the most recent result.
+4. The result rows are sent back to the model so it can answer the question.
+   The agent may also render an Altair chart from the most recent result.
 
-Do not approve a query if you do not want its result data sent to the Gemini API.
+With the Gemini provider, approving a query sends its result rows to Google's
+API — do not approve a query if you do not want that data disclosed. With the
+local provider, result rows never leave your machine.
+
+### Local LLM (Ollama)
+
+MedAgent can run fully on-machine against [Ollama](https://ollama.com/)
+instead of the Gemini API. The default local model is
+[gpt-oss:20b](https://ollama.com/library/gpt-oss) (~13 GB download; fits a
+16 GB GPU):
+
+```bash
+ollama pull gpt-oss:20b
+```
+
+Then pick **Local** in the app's sidebar "Provider" radio, or pass
+`--provider ollama` to the CLI. Set `MEDAGENT_PROVIDER=ollama` in `.env` to
+make local the default; `MEDAGENT_LOCAL_MODEL` overrides the model and
+`MEDAGENT_LOCAL_NUM_CTX` the context window (default 16384). The client
+respects `OLLAMA_HOST` if the server is not on `localhost:11434`.
+
+Privacy: with the local provider, approved query results stay on this machine
+— nothing is sent to a cloud API.
 
 ---
 
@@ -84,7 +108,7 @@ via chat, PR review for all merged code. Each week ends with something runnable.
 | Layer | Choice | Notes |
 |---|---|---|
 | Language | Python 3.13+ | Managed with uv |
-| LLM / agent loop | Google Gemini (`google-genai`) | Hand-rolled, resumable function-calling loop |
+| LLM / agent loop | Gemini (`google-genai`) or local Ollama (`ollama`, gpt-oss:20b) | Hand-rolled, resumable function-calling loop behind a provider seam |
 | Data layer | DuckDB + pandas | CSV ingestion and read-only analytical queries |
 | App / UI | Streamlit + Altair | Chat UI, query approval, tables, and charts |
 | Guardrails | SQL validator + read-only connection | Only one `SELECT` / `WITH ... SELECT` statement is accepted |
@@ -186,7 +210,8 @@ via chat, PR review for all merged code. Each week ends with something runnable.
 ```
 MedAgent/
 ├── src/medagent/
-│   ├── agent.py        # Gemini tool-calling session loop
+│   ├── agent.py        # provider-agnostic tool-calling session loop
+│   ├── providers.py    # Gemini / Ollama provider seam
 │   ├── app.py          # Streamlit chat application
 │   ├── cli.py          # terminal agent harness
 │   ├── ingest.py       # MIMIC CSV → DuckDB ingestion

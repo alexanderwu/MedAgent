@@ -7,11 +7,10 @@ has been ingested yet, runs with no tools — useful as a bare-loop smoke test.
 import argparse
 import sys
 
-from google import genai
-
-from medagent import db
+from medagent import config, db
 from medagent.agent import AgentSession
-from medagent.config import DB_DEMO, DB_FULL, MODEL
+from medagent.config import DB_DEMO, DB_FULL
+from medagent.providers import make_provider
 
 
 def main() -> int:
@@ -19,6 +18,13 @@ def main() -> int:
     parser.add_argument("question", help="Natural-language question")
     parser.add_argument(
         "--full", action="store_true", help="Use the full MIMIC-IV database"
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["gemini", "ollama"],
+        default=config.PROVIDER,
+        help="LLM provider: gemini (cloud) or ollama (local). "
+        "Defaults to MEDAGENT_PROVIDER.",
     )
     args = parser.parse_args()
 
@@ -32,22 +38,31 @@ def main() -> int:
             f"[no database at {db_path} — running without tools; run `just ingest-demo` first]"
         )
 
-    print(f"[model: {MODEL} · db: {db_path.name if conn else 'none'}]")
+    provider = make_provider(args.provider)
+    print(
+        f"[provider: {provider.name} · model: {provider.model} "
+        f"· db: {db_path.name if conn else 'none'}]"
+    )
     session = AgentSession(
         question=args.question,
-        client=genai.Client(),
+        provider=provider,
         conn=conn,
         dataset_label=dataset_label,
     )
     session.run_until_blocked()
 
+    destination = (
+        "Results go to the Gemini API."
+        if provider.name == "gemini"
+        else "Results stay on this machine."
+    )
     while session.status == "awaiting_approval":
         for item in list(session.pending):
             print("\n--- MedAgent proposes this query ---")
             if item.purpose:
                 print(f"Purpose: {item.purpose}")
             print(item.sql)
-            answer = input("Run this query? Results go to the Gemini API. [y/N] ")
+            answer = input(f"Run this query? {destination} [y/N] ")
             session.resolve_sql(item.tool_use_id, answer.strip().lower() == "y")
 
     print()

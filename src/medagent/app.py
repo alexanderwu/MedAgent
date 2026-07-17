@@ -10,17 +10,21 @@ Reject buttons re-enter it. Chat history is UI-only (no conversation memory).
 from pathlib import Path
 
 import streamlit as st
-from google import genai
 
-from medagent import db, tools
+from medagent import config, db, providers, tools
 from medagent.agent import AgentSession
-from medagent.config import DB_DEMO, DB_FULL, MODEL
+from medagent.config import DB_DEMO, DB_FULL, LOCAL_MODEL, MODEL
 
 st.set_page_config(page_title="MedAgent", layout="wide")
 
 DATASETS = {
     "demo": (DB_DEMO, "demo 2.2 (100 patients)"),
     "full": (DB_FULL, "full 3.1"),
+}
+
+PROVIDERS = {
+    "gemini": ("Gemini (cloud)", MODEL),
+    "ollama": (f"Local · {LOCAL_MODEL}", LOCAL_MODEL),
 }
 
 
@@ -30,14 +34,18 @@ def _conn(db_path: str):
 
 
 @st.cache_resource
-def _client() -> genai.Client:
-    return genai.Client()
+def _provider(name: str) -> providers.Provider:
+    return providers.make_provider(name)
 
 
 def _init_state() -> None:
     st.session_state.setdefault("chat", [])
     st.session_state.setdefault("agent", None)
     st.session_state.setdefault("dataset", "demo")
+    st.session_state.setdefault(
+        "provider",
+        config.PROVIDER if config.PROVIDER in PROVIDERS else "gemini",
+    )
 
 
 def _render_events(events: list[tools.ToolEvent]) -> None:
@@ -71,7 +79,13 @@ def main() -> None:
         missing = [k for k in DATASETS if k not in available]
         if missing:
             st.caption(f"({', '.join(missing)} not ingested yet)")
-        st.caption(f"Model: {MODEL}")
+        provider_name = st.radio(
+            "Provider",
+            list(PROVIDERS),
+            key="provider",
+            format_func=lambda k: PROVIDERS[k][0],
+        )
+        st.caption(f"Model: {PROVIDERS[provider_name][1]}")
         if st.button("Clear chat"):
             st.session_state.chat = []
             st.session_state.agent = None
@@ -79,10 +93,12 @@ def main() -> None:
 
     db_path, dataset_label = DATASETS[dataset]
 
-    # A dataset switch mid-question would leave the agent pointing at the old
-    # connection — drop it.
+    # A dataset or provider switch mid-question would leave the agent pointing
+    # at the old connection or transcript format — drop it.
     agent: AgentSession | None = st.session_state.agent
-    if agent is not None and agent.dataset_label != dataset_label:
+    if agent is not None and (
+        agent.dataset_label != dataset_label or agent.provider.name != provider_name
+    ):
         st.session_state.agent = None
         agent = None
 
@@ -104,6 +120,9 @@ def main() -> None:
                 st.caption(
                     "Approving runs this query locally and sends the result rows "
                     "to the Google Gemini API."
+                    if agent.provider.name == "gemini"
+                    else "Approving runs this query locally; the result rows stay "
+                    "on this machine (local model)."
                 )
                 col_a, col_b, _ = st.columns([1, 1, 4])
                 approve = col_a.button("✅ Approve", key=f"approve_{item.tool_use_id}")
@@ -133,7 +152,7 @@ def main() -> None:
         st.session_state.chat.append({"role": "user", "text": question})
         session = AgentSession(
             question=question,
-            client=_client(),
+            provider=_provider(provider_name),
             conn=_conn(str(db_path)),
             dataset_label=dataset_label,
         )

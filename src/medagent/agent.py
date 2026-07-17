@@ -1,26 +1,26 @@
-"""Hand-rolled Gemini tool-calling loop, designed to survive Streamlit reruns.
+"""Hand-rolled tool-calling loop, designed to survive Streamlit reruns.
 
 The loop is a resumable state object, not a blocking function: when the model
 requests run_sql, run_until_blocked() *returns* with status "awaiting_approval"
 and the pending SQL parked in session state. resolve_sql() feeds the verdict
 back in and re-enters the loop once every gated call in the turn is resolved.
 
-Gemini function calls carry no ids, so each call gets a synthetic id and
-function responses are sent back in the original call order.
+Everything provider-specific (Gemini vs. local Ollama) lives behind the
+Provider protocol in providers.py; the transcript holds provider-native
+messages the loop never inspects. Neither API supplies usable call ids, so
+each call gets a synthetic id and tool results are sent back in the original
+call order.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import duckdb
-import httpx
 import pandas as pd
-from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types
 
 from medagent import db, tools
-from medagent.config import MAX_TOOL_ITERATIONS, MODEL
+from medagent.config import MAX_TOOL_ITERATIONS
+from medagent.providers import Provider, ProviderError
 from medagent.sqlguard import SQLValidationError
 
 SYSTEM_PROMPT = """\
@@ -68,14 +68,17 @@ class AgentSession:
     """One user question = one session = one fresh API transcript."""
 
     question: str
-    client: genai.Client
+    provider: Provider
     conn: duckdb.DuckDBPyConnection | None
     dataset_label: str
 
     status: Status = "running"
-    contents: list[types.Content] = field(default_factory=list)
+    contents: list[Any] = field(default_factory=list)
     pending: list[PendingSQL] = field(default_factory=list)
-    resolved_results: dict[str, types.Part] = field(default_factory=dict)
+    # synthetic id -> (function name, {"result": ...} | {"error": ...})
+    resolved_results: dict[str, tuple[str, dict[str, Any]]] = field(
+        default_factory=dict
+    )
     current_calls: list[str] = field(default_factory=list)  # synthetic ids, call order
     events: list[tools.ToolEvent] = field(default_factory=list)
     final_text: str | None = None
@@ -84,11 +87,8 @@ class AgentSession:
     iterations: int = 0
 
     def __post_init__(self) -> None:
-        self.contents = [
-            types.Content(role="user", parts=[types.Part(text=self.question)])
-        ]
+        self.contents = [self.provider.user_text(self.question)]
         self.system = SYSTEM_PROMPT.format(dataset=self.dataset_label)
-        self._call_names: dict[str, str] = {}  # synthetic id -> function name
 
     # -- driving the loop ---------------------------------------------------
 
@@ -103,10 +103,12 @@ class AgentSession:
         self.pending.remove(item)
 
         if not approved:
-            self.resolved_results[tool_use_id] = self._function_response(
-                tool_use_id,
-                error="The user declined to run this query. Ask what they'd like "
-                "instead or propose a different query.",
+            self.resolved_results[tool_use_id] = (
+                "run_sql",
+                {
+                    "error": "The user declined to run this query. Ask what they'd "
+                    "like instead or propose a different query."
+                },
             )
             self.events.append(
                 tools.ToolEvent("run_sql", {"sql": item.sql}, "declined by user")
@@ -127,80 +129,48 @@ class AgentSession:
             return
         self.iterations += 1
 
-        config = types.GenerateContentConfig(
-            system_instruction=self.system,
-            tools=(
-                [
-                    types.Tool(
-                        function_declarations=cast(Any, tools.FUNCTION_DECLARATIONS)
-                    )
-                ]
-                if self.conn is not None
-                else None
-            ),
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                disable=True
-            ),
-        )
         try:
-            response = self.client.models.generate_content(
-                model=MODEL, contents=cast(Any, self.contents), config=config
+            step = self.provider.generate(
+                self.system, self.contents, use_tools=self.conn is not None
             )
-        except genai_errors.APIError as e:
-            self._fail(f"Gemini API error ({e.code}): {e.message}")
-            return
-        except httpx.RequestError:
-            self._fail("Could not reach the Gemini API — check your network.")
+        except ProviderError as e:
+            self._fail(str(e))
             return
 
-        if not response.candidates:
-            self._fail("The Gemini API returned an empty response.")
-            return
-        candidate = response.candidates[0]
-        content = candidate.content
-        if content is None:
-            self._fail("The Gemini API returned an empty response.")
-            return
-        self.contents.append(content)
+        self.contents.append(step.message)
 
-        calls = response.function_calls or []
-        if not calls:
-            text = _text_of(content)
-            if candidate.finish_reason == types.FinishReason.MAX_TOKENS:
+        if not step.function_calls:
+            text = step.text
+            if step.truncated:
                 text += "\n\n*(response truncated at the token limit)*"
             if not text:
-                self._fail(
-                    f"The model stopped without a reply ({candidate.finish_reason})."
-                )
+                self._fail("The model stopped without a reply.")
                 return
             self.final_text = text
             self.status = "done"
             return
 
         self.current_calls = []
-        for index, call in enumerate(calls):
+        for index, call in enumerate(step.function_calls):
             call_id = f"call_{self.iterations}_{index}"
             self.current_calls.append(call_id)
-            self._call_names[call_id] = call.name or ""
-            call_args: dict[str, Any] = dict(call.args or {})
             if call.name == "run_sql":
                 self.pending.append(
                     PendingSQL(
                         call_id,
-                        call_args.get("sql", ""),
-                        call_args.get("purpose", ""),
+                        call.args.get("sql", ""),
+                        call.args.get("purpose", ""),
                     )
                 )
             else:
                 result_text, is_error, event = tools.execute_auto_tool(
-                    call.name or "", call_args, self.conn, self.last_df
+                    call.name, call.args, self.conn, self.last_df
                 )
                 self.events.append(event)
-                self.resolved_results[call_id] = self._function_response(
-                    call_id,
-                    error=result_text if is_error else None,
-                    result=result_text,
+                payload = (
+                    {"error": result_text} if is_error else {"result": result_text}
                 )
+                self.resolved_results[call_id] = (call.name, payload)
 
         if self.pending:
             self.status = "awaiting_approval"
@@ -212,8 +182,9 @@ class AgentSession:
         try:
             result = db.run_query(self.conn, item.sql)
         except (SQLValidationError, duckdb.Error) as e:
-            self.resolved_results[item.tool_use_id] = self._function_response(
-                item.tool_use_id, error=f"Query failed: {e}"
+            self.resolved_results[item.tool_use_id] = (
+                "run_sql",
+                {"error": f"Query failed: {e}"},
             )
             self.events.append(
                 tools.ToolEvent("run_sql", {"sql": item.sql}, f"error: {e}")
@@ -227,8 +198,9 @@ class AgentSession:
             if result.truncated
             else f"\n({len(result.df)} rows)"
         )
-        self.resolved_results[item.tool_use_id] = self._function_response(
-            item.tool_use_id, result=result.df.to_csv(index=False) + note
+        self.resolved_results[item.tool_use_id] = (
+            "run_sql",
+            {"result": result.df.to_csv(index=False) + note},
         )
         self.events.append(
             tools.ToolEvent(
@@ -240,24 +212,12 @@ class AgentSession:
         )
 
     def _flush_tool_results(self) -> None:
-        """Send all function responses for the turn as ONE message, in call order."""
-        parts = [self.resolved_results.pop(call_id) for call_id in self.current_calls]
-        if parts:
-            self.contents.append(types.Content(role="user", parts=parts))
+        """Send all tool results for the turn back at once, in call order."""
+        ordered = [self.resolved_results.pop(call_id) for call_id in self.current_calls]
+        if ordered:
+            self.contents.extend(self.provider.tool_results(ordered))
         self.current_calls = []
-
-    def _function_response(
-        self, call_id: str, result: str | None = None, error: str | None = None
-    ) -> types.Part:
-        payload = {"error": error} if error is not None else {"result": result}
-        return types.Part.from_function_response(
-            name=self._call_names.get(call_id, "run_sql"), response=payload
-        )
 
     def _fail(self, message: str) -> None:
         self.status = "error"
         self.error = message
-
-
-def _text_of(content: types.Content) -> str:
-    return "".join(p.text for p in content.parts or [] if p.text)
