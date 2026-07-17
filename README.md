@@ -1,15 +1,68 @@
 # MedAgent 🩺🤖
 
-An AI agent for clinical data intelligence, built over an 8-week summer internship.
-MedAgent assists with **Real-World Evidence (RWE) data analytics** and **clinical text
-mining / NLP**, with stretch goals in **market analysis & forecasting** and
-**clinical trial design & analysis**.
+MedAgent is a natural-language clinical-data analysis app for the
+[MIMIC-IV](https://physionet.org/content/mimiciv/) dataset. It uses Gemini to
+inspect a local DuckDB database, propose read-only SQL, and explain the
+results. Every SQL query requires explicit user approval before it runs.
 
-The end product is an **interactive demo app** (Streamlit) where a user can ask
-natural-language questions over public clinical datasets — e.g.
-*"What are the most common comorbidities among ICU patients with sepsis?"* or
-*"Summarize the adverse-event signal for metformin"* — and the agent plans,
-queries the data, runs the analysis, and explains the result.
+The project currently supports the MIMIC-IV demo subset (100 patients) and a
+locally available full MIMIC-IV 3.1 dataset. It includes both a Streamlit chat
+app and an interactive CLI harness.
+
+## Quick Start
+
+Requirements: Python 3.13+, [uv](https://docs.astral.sh/uv/), a Gemini API key,
+and the MIMIC-IV demo files downloaded under the repository's `data/raw/`
+directory.
+
+```bash
+git clone https://github.com/alexanderwu/MedAgent.git
+cd MedAgent
+uv sync
+copy .env.example .env  # use cp .env.example .env on macOS/Linux
+```
+
+Set `GEMINI_API_KEY` in `.env`. `MEDAGENT_MODEL` is optional and defaults to
+`gemini-2.5-flash`.
+
+Then ingest the demo data and launch the app:
+
+```bash
+just ingest-demo
+just app
+```
+
+Or ask a question from the terminal:
+
+```bash
+just ask "What are the most common admission types?"
+```
+
+Use `just ingest` to build the full MIMIC-IV 3.1 database once its source files
+are present. Close the app before ingesting: DuckDB allows one writer or many
+readers, but not both at once.
+
+### Data locations
+
+The ingest commands expect the MIMIC files in these locations:
+
+```
+data/raw/physionet.org/files/mimic-iv-demo/2.2/{hosp,icu}/*.csv.gz
+data/raw/physionet.org/files/mimiciv/3.1/{hosp,icu}/*.csv.gz
+```
+
+Generated databases are stored under `data/duckdb/` and are ignored by Git.
+
+### How queries work
+
+1. Gemini inspects the local database schema.
+2. It proposes a single `SELECT` (or `WITH ... SELECT`) query and explains its purpose.
+3. You approve or reject the query. Approved queries run locally against a
+   read-only DuckDB connection; results are capped at 200 rows.
+4. The result rows are sent to Gemini so it can answer the question. The agent
+   may also render an Altair chart from the most recent result.
+
+Do not approve a query if you do not want its result data sent to the Gemini API.
 
 ---
 
@@ -26,18 +79,15 @@ via chat, PR review for all merged code. Each week ends with something runnable.
 
 ---
 
-## Tech Stack (zero-cost)
+## Current Tech Stack
 
 | Layer | Choice | Notes |
 |---|---|---|
-| Language | Python 3.11+ | |
-| LLM (agent brain) | Llama 3.x / Mistral via [Ollama](https://ollama.com) | Runs locally; Google Colab free tier as fallback for heavier jobs |
-| Clinical NLP | Bio_ClinicalBERT, BioBERT, scispaCy | Hugging Face / spaCy — free, purpose-built for clinical text |
-| Agent framework | LangGraph (or a minimal hand-rolled tool loop) | Decide in Week 2 spike |
-| Data layer | DuckDB + pandas | MIMIC-IV ships as CSVs; DuckDB gives fast local SQL |
-| App / UI | Streamlit | Fast to build, free to host (Streamlit Community Cloud — demo data only) |
-| Forecasting | statsmodels, Prophet | Stretch-goal phase |
-| Versioning | GitHub, PRs + reviews | |
+| Language | Python 3.13+ | Managed with uv |
+| LLM / agent loop | Google Gemini (`google-genai`) | Hand-rolled, resumable function-calling loop |
+| Data layer | DuckDB + pandas | CSV ingestion and read-only analytical queries |
+| App / UI | Streamlit + Altair | Chat UI, query approval, tables, and charts |
+| Guardrails | SQL validator + read-only connection | Only one `SELECT` / `WITH ... SELECT` statement is accepted |
 
 ---
 
@@ -53,9 +103,11 @@ via chat, PR review for all merged code. Each week ends with something runnable.
 | [PubMed / PMC](https://www.ncbi.nlm.nih.gov/home/develop/api/) | Literature mining | Open API |
 | [CMS public datasets](https://data.cms.gov/) | Utilization & market analysis | Open |
 
-> ⚠️ **Data use:** MIMIC data must never be committed to this repo, uploaded to
-> any hosted service, or sent to any external API. All MIMIC processing stays
-> local. The hosted demo uses only the open demo subset and synthetic examples.
+> ⚠️ **Data use:** MIMIC source files and generated DuckDB databases must never
+> be committed to this repository. MedAgent executes database queries locally,
+> but sending an approved result to Gemini sends those result rows to Google's
+> API. Use only data you are authorized to disclose, and review your applicable
+> PhysioNet data-use agreement before using the full dataset.
 
 ---
 
@@ -129,30 +181,22 @@ via chat, PR review for all merged code. Each week ends with something runnable.
 
 ---
 
-## Repository Layout (planned)
+## Repository Layout
 
 ```
 MedAgent/
-├── medagent/
-│   ├── agent/          # orchestration, prompts, tool routing
-│   ├── analytics/      # RWE cohort & statistical tools
-│   ├── nlp/            # NER, summarization, retrieval
-│   ├── data/           # ingestion, DuckDB layer, API clients
-│   └── app/            # Streamlit UI
+├── src/medagent/
+│   ├── agent.py        # Gemini tool-calling session loop
+│   ├── app.py          # Streamlit chat application
+│   ├── cli.py          # terminal agent harness
+│   ├── ingest.py       # MIMIC CSV → DuckDB ingestion
+│   ├── db.py           # read-only query and schema helpers
+│   ├── sqlguard.py     # single-statement, read-only SQL validation
+│   └── tools.py        # schema, SQL, and chart tool definitions
+├── data/raw/           # local MIMIC source files (ignored)
+├── data/duckdb/        # generated databases (ignored)
 ├── notebooks/          # EDA, experiments, weekly demos
-├── eval/               # question bank + evaluation harness
-├── tests/
-└── docs/
-```
-
-## Getting Started (placeholder — filled in during Week 1)
-
-```bash
-git clone https://github.com/alexanderwu/MedAgent.git
-cd MedAgent
-pip install -e ".[dev]"
-ollama pull llama3.1:8b
-streamlit run medagent/app/main.py   # demo mode, no credentials needed
+└── justfile            # common project commands
 ```
 
 ---
