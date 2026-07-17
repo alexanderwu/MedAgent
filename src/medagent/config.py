@@ -1,10 +1,24 @@
+import os
 import sys
 from pathlib import Path
 
-P_ROOT = Path(__name__).resolve().parents[1]
+from dotenv import load_dotenv
+
+load_dotenv()
+
+P_ROOT = Path(__file__).resolve().parents[2]
 P_RAW = P_ROOT / "data/raw"
 P_MIMIC = P_RAW / "physionet.org/files/mimiciv/3.1"
 P_DEMO = P_RAW / "physionet.org/files/mimic-iv-demo/2.2"
+
+P_DUCKDB = P_ROOT / "data/duckdb"
+DB_DEMO = P_DUCKDB / "mimic_demo.duckdb"
+DB_FULL = P_DUCKDB / "mimic.duckdb"
+
+MODEL = os.getenv("MEDAGENT_MODEL", "claude-sonnet-5")
+EFFORT = os.getenv("MEDAGENT_EFFORT", "high")
+ROW_CAP = 200
+MAX_TOOL_ITERATIONS = 15
 
 
 def hello():

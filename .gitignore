@@ -1,5 +1,6 @@
 # Project Specific
 data/raw/physionet.org/
+data/duckdb/
 _AW_*
 
 # Virtual Environments
