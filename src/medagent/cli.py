@@ -7,7 +7,7 @@ has been ingested yet, runs with no tools — useful as a bare-loop smoke test.
 import argparse
 import sys
 
-import anthropic
+from google import genai
 
 from medagent import db
 from medagent.agent import AgentSession
@@ -35,7 +35,7 @@ def main() -> int:
     print(f"[model: {MODEL} · db: {db_path.name if conn else 'none'}]")
     session = AgentSession(
         question=args.question,
-        client=anthropic.Anthropic(),
+        client=genai.Client(),
         conn=conn,
         dataset_label=dataset_label,
     )
@@ -43,11 +43,11 @@ def main() -> int:
 
     while session.status == "awaiting_approval":
         for item in list(session.pending):
-            print("\n--- Claude proposes this query ---")
+            print("\n--- MedAgent proposes this query ---")
             if item.purpose:
                 print(f"Purpose: {item.purpose}")
             print(item.sql)
-            answer = input("Run this query? Results go to the Anthropic API. [y/N] ")
+            answer = input("Run this query? Results go to the Gemini API. [y/N] ")
             session.resolve_sql(item.tool_use_id, answer.strip().lower() == "y")
 
     print()

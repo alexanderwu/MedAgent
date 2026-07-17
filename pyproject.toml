@@ -9,8 +9,8 @@ authors = [
 ]
 dependencies = [
     "altair>=6.2.2",
-    "anthropic>=0.117.0",
     "duckdb>=1.5.4",
+    "google-genai>=2.12.1",
     "jupyterlab>=4.6.1",
     "matplotlib>=3.11.0",
     "numpy>=2.5.0",

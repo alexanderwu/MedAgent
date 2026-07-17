@@ -9,12 +9,12 @@ Reject buttons re-enter it. Chat history is UI-only (no conversation memory).
 
 from pathlib import Path
 
-import anthropic
 import streamlit as st
+from google import genai
 
 from medagent import db, tools
 from medagent.agent import AgentSession
-from medagent.config import DB_DEMO, DB_FULL, EFFORT, MODEL
+from medagent.config import DB_DEMO, DB_FULL, MODEL
 
 st.set_page_config(page_title="MedAgent", layout="wide")
 
@@ -30,8 +30,8 @@ def _conn(db_path: str):
 
 
 @st.cache_resource
-def _client() -> anthropic.Anthropic:
-    return anthropic.Anthropic()
+def _client() -> genai.Client:
+    return genai.Client()
 
 
 def _init_state() -> None:
@@ -71,7 +71,7 @@ def main() -> None:
         missing = [k for k in DATASETS if k not in available]
         if missing:
             st.caption(f"({', '.join(missing)} not ingested yet)")
-        st.caption(f"Model: {MODEL} · effort: {EFFORT}")
+        st.caption(f"Model: {MODEL}")
         if st.button("Clear chat"):
             st.session_state.chat = []
             st.session_state.agent = None
@@ -97,13 +97,13 @@ def main() -> None:
             with st.chat_message("assistant"):
                 _render_events(agent.events)
                 item = agent.pending[0]
-                st.markdown("**Claude wants to run this query:**")
+                st.markdown("**MedAgent wants to run this query:**")
                 if item.purpose:
                     st.caption(item.purpose)
                 st.code(item.sql, language="sql")
                 st.caption(
                     "Approving runs this query locally and sends the result rows "
-                    "to the Anthropic API."
+                    "to the Google Gemini API."
                 )
                 col_a, col_b, _ = st.columns([1, 1, 4])
                 approve = col_a.button("✅ Approve", key=f"approve_{item.tool_use_id}")

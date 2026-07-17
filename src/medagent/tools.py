@@ -1,4 +1,4 @@
-"""Tool definitions for the Claude agent, plus execution of the auto tools.
+"""Tool definitions for the Gemini agent, plus execution of the auto tools.
 
 `run_sql` is the only human-gated tool; it is executed in agent.resolve_sql
 after the user approves. `get_schema` and `plot` execute automatically.
@@ -14,7 +14,7 @@ import pandas as pd
 from medagent import db
 from medagent.config import ROW_CAP
 
-TOOLS: list[dict[str, Any]] = [
+FUNCTION_DECLARATIONS: list[dict[str, Any]] = [
     {
         "name": "get_schema",
         "description": (
@@ -23,7 +23,7 @@ TOOLS: list[dict[str, Any]] = [
             "table's columns and types plus 3 sample rows. Always inspect the "
             "relevant tables before writing SQL against them."
         ),
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "table": {
@@ -41,7 +41,7 @@ TOOLS: list[dict[str, Any]] = [
             f"Results are capped at {ROW_CAP} rows — prefer aggregation (GROUP BY, "
             "count, avg, median) over pulling raw rows. DuckDB dialect."
         ),
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "sql": {
@@ -65,7 +65,7 @@ TOOLS: list[dict[str, Any]] = [
             "Render an Altair chart from the result of the MOST RECENT successful "
             "run_sql call. Column names must exist in that result. Call run_sql first."
         ),
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "mark": {"type": "string", "enum": ["bar", "line", "point", "area"]},

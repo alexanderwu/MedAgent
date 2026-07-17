@@ -15,8 +15,7 @@ P_DUCKDB = P_ROOT / "data/duckdb"
 DB_DEMO = P_DUCKDB / "mimic_demo.duckdb"
 DB_FULL = P_DUCKDB / "mimic.duckdb"
 
-MODEL = os.getenv("MEDAGENT_MODEL", "claude-sonnet-5")
-EFFORT = os.getenv("MEDAGENT_EFFORT", "high")
+MODEL = os.getenv("MEDAGENT_MODEL", "gemini-2.5-flash")
 ROW_CAP = 200
 MAX_TOOL_ITERATIONS = 15
 
