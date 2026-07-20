@@ -8,6 +8,7 @@ authors = [
     { name = "Alexander Wu", email = "alexander.wu7@gmail.com" }
 ]
 dependencies = [
+    "google-genai>=2.12.1",
     "jupyterlab>=4.6.1",
     "matplotlib>=3.11.0",
     "numpy>=2.5.0",

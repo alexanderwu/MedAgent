@@ -1,5 +1,8 @@
 import streamlit as st
 from google import genai
+from dotenv import load_dotenv
+
+load_dotenv()
 
 st.title("MedAgent")
 
@@ -20,7 +23,7 @@ if prompt := st.chat_input("What would you like me to predict?"):
         st.session_state.messages.append({"role": "user", "content": prompt})
 
     with st.chat_message("assistant"):
-        client = genai.Client(api_key="AIzaSyCGRxFVFp0TIX0nhCPZ25YVsHjnUeV4oFo")
+        client = genai.Client()
 
         request = client.interactions.create(
             model="gemini-3.5-flash",
