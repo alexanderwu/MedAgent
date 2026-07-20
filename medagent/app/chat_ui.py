@@ -1,5 +1,5 @@
 import streamlit as st
-import pandas as pd
+from google import genai
 
 st.title("MedAgent")
 
@@ -20,14 +20,30 @@ if prompt := st.chat_input("What would you like me to predict?"):
         st.session_state.messages.append({"role": "user", "content": prompt})
 
     with st.chat_message("assistant"):
-        response = "This is a placeholder response from the model."
-        st.markdown(response)
-        predicions_matrix = pd.DataFrame(
-            {
-                "Patient 0": [85, 0.01, 1],
-            },
-            index=["Length of Stay", "Readmission Rate", "Mortality Rate"],
-        )
-        st.write(predicions_matrix)
+        client = genai.Client(api_key="AIzaSyCGRxFVFp0TIX0nhCPZ25YVsHjnUeV4oFo")
 
+        request = client.interactions.create(
+            model="gemini-3.5-flash",
+            input='"'
+            + prompt
+            + '"'
+            + " Please extract the requested prediction metric as well as provided characterisitics of the patient. Please provide the output in a the following format: [<prediction1>, <prediction2>, ...], [<characteristic1>, <characteristic2>, ...]. If you do not have enough information, say 'I'm sorry, I don't have enough information to provide a prediction.'",
+        )
+
+        if not request.output_text:
+            response = "Gemini Error: No output text received from the model."
+        elif (
+            request.output_text
+            == "I'm sorry, I don't have enough information to provide a prediction."
+        ):
+            response = request.output_text
+        else:
+            response = (
+                "You gave the characteristics: "
+                + request.output_text.split("], [")[1].replace("]", "").replace("[", "")
+                + ". The model predicts: "
+                + request.output_text.split("], [")[0].replace("]", "").replace("[", "")
+                + "."
+            )
+        st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
