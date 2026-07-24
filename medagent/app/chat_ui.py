@@ -1,23 +1,53 @@
 import streamlit as st
 import ollama
 import time
-from typing import List, Optional
+from typing import List, Optional, Literal, get_args
 from pydantic import BaseModel, Field
+
+# --- SUPPORTED METRICS AND CHARACTERISTICS ---
+SUPPORTED_METRICS = Literal["readmission_rate", "length_of_stay", "mortality_rate"]
+SUPPORTED_CHARACTERISTICS = Literal[
+    "patient_weight", "history_of_heart_problems", "age", "diabetic_status"
+]
 
 
 # --- SCHEMA FOR PATIENT DATA EXTRACTION ---
 class PatientDataExtraction(BaseModel):
     # Match the exact phrasing you want the model to look for
-    requested_metrics: List[str] = Field(
+    requested_metrics: List[SUPPORTED_METRICS] = Field(
         description="List of metrics the user wants to predict, e.g., 'readmission rate' or 'length of stay'."
     )
-    characteristics: List[str] = Field(
+    characteristics: List[SUPPORTED_CHARACTERISTICS] = Field(
         description="List of patient characteristics provided, e.g., '100 pounds', 'heart problems'."
     )
     error_message: Optional[str] = Field(
         default=None,
         description="Set ONLY if there is not enough information to identify metrics or characteristics.",
     )
+
+
+allowed_metrics_list = get_args(SUPPORTED_METRICS)
+allowed_chars_list = get_args(SUPPORTED_CHARACTERISTICS)
+
+
+def generate_extraction_prompt(user_input: str) -> str:
+    # Programmatically format the lists into a readable layout for the LLM
+    metrics_str = "\n".join([f"- {m}" for m in allowed_metrics_list])
+    chars_str = "\n".join([f"- {c}" for c in allowed_chars_list])
+
+    instruction = (
+        "You are a strict data extraction and normalization assistant.\n"
+        "Your task is to analyze user input and extract requested metrics and characteristics.\n"
+        "CRITICAL: You are only allowed to extract items that strictly match the allowed lists below.\n\n"
+        f"ALLOWED METRICS:\n{metrics_str}\n\n"
+        f"ALLOWED CHARACTERISTICS:\n{chars_str}\n\n"
+        f'Analyze the following user input: "{user_input}".\n'
+        "Map natural language mentions to the closest exact text token in the allowed lists. "
+        "If a metric or characteristic mentioned by the user is not in the allowed lists, IGNORE IT.\n\n"
+        "If the input contains no relevant information to extract any allowed data, set the "
+        "'error_message' field to: 'I'm sorry, I don't have enough information to provide a prediction.'"
+    )
+    return instruction
 
 
 st.title("MedAgent")
@@ -45,13 +75,7 @@ if prompt := st.chat_input("What would you like me to predict?"):
     start_time = time.time()
 
     with st.chat_message("assistant"):
-        instruction = (
-            f'Analyze the following user input: "{prompt}".\n\n'
-            "Extract the 'requested_metrics' and the provided patient 'characteristics'.\n"
-            "If the user did not provide enough information to extract these, set the 'error_message' field to: "
-            "'I'm sorry, I don't have enough information to provide a prediction.'"
-        )
-
+        instruction = generate_extraction_prompt(prompt)
         try:
             request = ollama.chat(
                 model="qwen2.5:3b",
