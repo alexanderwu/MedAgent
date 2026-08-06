@@ -18,9 +18,11 @@ def load_data(table="hosp/admissions", demo=False) -> pd.DataFrame:
         pd.DataFrame: table from MIMIC-IV
     """
     P_src = P_MIMIC if not demo else P_DEMO
-    P_data_list = [p for p in Path(P_src).rglob(f"{table}.csv.gz")]
-    assert len(P_data_list) == 1, "Unique table not found"
+    matches = list(P_src.rglob(f"{table}.csv.gz"))
 
-    P_data = P_data_list[0]
-    data = pd.read_csv(P_data)
-    return data
+    if len(matches) != 1:
+     raise FileNotFoundError(
+        f"Expected exactly one file for '{table}', found {len(matches)} under {P_src}"
+    )
+
+    return pd.read_csv(matches[0])
