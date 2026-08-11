@@ -11,6 +11,7 @@ P_CHECKPOINTS = P_ROOT / "checkpoints"
 P_HOSP = P_MIMIC / "hosp"
 P_ICU = P_MIMIC / "icu"
 
+# READMISSION_WINDOW_DAYS = 30
 EXTENDED_STAY_THRESHOLD_DAYS = 7
 FIRST_24_HOURS = 24
 RANDOM_STATE = 42
@@ -96,3 +97,44 @@ COUNT_FEATURE_COLUMNS = [
     "num_distinct_meds",
     "num_micro_tests",
 ]
+
+
+# ==========================================================
+# Readmission-model configuration
+# ==========================================================
+
+READMISSION_WINDOW_DAYS = 30
+READMISSION_RECALL_TARGET = 0.70
+
+READMISSION_FEATURE_COLUMNS = [
+    # Demographics and admission-time information
+    "gender",
+    "anchor_age",
+    "admission_type",
+    "admission_location",
+    "insurance",
+    "language",
+    "marital_status",
+    "race",
+    "first_careunit",
+
+    # Prior history only
+    "prior_admission_count",
+    "days_since_previous_discharge",
+    "previous_hospital_los_days",
+    "mean_prior_hospital_los_days",
+    "prior_icu_admission_count",
+    "prior_icu_stay_count",
+
+    # First ICU 24-hour microbiology
+    "micro_event_count_24h",
+    "organism_detected_event_count_24h",
+]
+
+READMISSION_MODEL_SETTINGS = {
+    "n_estimators": 500,
+    "max_depth": 4,
+    "learning_rate": 0.03,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+}

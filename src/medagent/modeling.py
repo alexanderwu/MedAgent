@@ -8,20 +8,28 @@ from medagent.config import (
     HARD_LEAKAGE_COLUMNS,
     RANDOM_STATE,
     TEST_SIZE,
+    SOFT_LEAKAGE_COLUMNS,
 )
 
 
 """
-steps in order:
-
 feature_engineering.py
-raw MIMIC tables → clinical feature table (df_experiment)
+raw MIMIC tables
+→ df_experiment
 
 preprocessing.py
-df_experiment → cleaned, consistently formatted model-ready features
+df_experiment
+→ clean, consistently formatted features
 
 modeling.py
-clean features → train/test split → XGBoost model → metrics
+clean features
+→ train/test split
+→ XGBoost model
+→ metrics
+
+persist.py
+model + feature list + preprocessing metadata + metrics
+→ one saved model bundle (.pkl)
 
 """
 
@@ -130,3 +138,245 @@ def evaluate_extended_stay_model(
         "auc_roc": float(roc_auc_score(y_test, y_prob)),
         "confusion_matrix": confusion_matrix(y_test, y_pred).tolist(),
     }
+
+
+import numpy as np
+
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+from sklearn.pipeline import Pipeline
+
+from medagent.config import (
+    RANDOM_STATE,
+    READMISSION_MODEL_SETTINGS,
+    READMISSION_RECALL_TARGET,
+)
+from medagent.preprocessing import build_readmission_preprocessor
+
+
+def split_readmission_train_validation_test(
+    cohort: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Make patient-safe 60% / 20% / 20% splits.
+
+    A patient can appear in exactly one of:
+    train, validation, or final test.
+    """
+
+    groups = cohort["subject_id"]
+    y = cohort["readmit_30d"]
+
+    outer_splitter = GroupShuffleSplit(
+        n_splits=1,
+        test_size=0.20,
+        random_state=RANDOM_STATE,
+    )
+
+    train_validation_idx, test_idx = next(
+        outer_splitter.split(cohort, y, groups=groups)
+    )
+
+    train_validation_cohort = cohort.iloc[
+        train_validation_idx
+    ].copy()
+
+    test_cohort = cohort.iloc[test_idx].copy()
+
+    inner_splitter = GroupShuffleSplit(
+        n_splits=1,
+        test_size=0.25,
+        random_state=RANDOM_STATE,
+    )
+
+    train_idx, validation_idx = next(
+        inner_splitter.split(
+            train_validation_cohort,
+            train_validation_cohort["readmit_30d"],
+            groups=train_validation_cohort["subject_id"],
+        )
+    )
+
+    train_cohort = train_validation_cohort.iloc[train_idx].copy()
+
+    validation_cohort = train_validation_cohort.iloc[
+        validation_idx
+    ].copy()
+
+    return train_cohort, validation_cohort, test_cohort
+
+
+def build_readmission_pipeline(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    model_settings: dict | None = None,
+) -> Pipeline:
+    """
+    Build the complete pipeline:
+    raw features -> preprocessing -> imbalance-weighted XGBoost.
+    """
+
+    if model_settings is None:
+        model_settings = READMISSION_MODEL_SETTINGS
+
+    preprocessor = build_readmission_preprocessor(X_train)
+
+    positive_count = (y_train == 1).sum()
+
+    if positive_count == 0:
+        raise ValueError(
+            "Training data has no positive readmission examples."
+        )
+
+    scale_pos_weight = (y_train == 0).sum() / positive_count
+
+    model = xgb.XGBClassifier(
+        objective="binary:logistic",
+        eval_metric="logloss",
+        scale_pos_weight=scale_pos_weight,
+        random_state=RANDOM_STATE,
+        **model_settings,
+    )
+
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("model", model),
+        ]
+    )
+
+
+def train_readmission_pipeline(
+    cohort: pd.DataFrame,
+    feature_columns: list[str],
+    model_settings: dict | None = None,
+) -> Pipeline:
+    """Fit the complete readmission pipeline on one cohort."""
+
+    X_train = cohort[feature_columns].copy()
+    y_train = cohort["readmit_30d"].copy()
+
+    pipeline = build_readmission_pipeline(
+        X_train,
+        y_train,
+        model_settings=model_settings,
+    )
+
+    pipeline.fit(X_train, y_train)
+
+    return pipeline
+
+
+def evaluate_readmission_model(
+    pipeline: Pipeline,
+    cohort: pd.DataFrame,
+    feature_columns: list[str],
+    threshold: float,
+) -> dict:
+    """Evaluate a fitted readmission pipeline at one alert threshold."""
+
+    X = cohort[feature_columns].copy()
+    y_true = cohort["readmit_30d"].copy()
+
+    probabilities = pipeline.predict_proba(X)[:, 1]
+    predictions = (probabilities >= threshold).astype(int)
+
+    return {
+        "threshold": float(threshold),
+        "accuracy": float(accuracy_score(y_true, predictions)),
+        "precision": float(
+            precision_score(y_true, predictions, zero_division=0)
+        ),
+        "recall": float(
+            recall_score(y_true, predictions, zero_division=0)
+        ),
+        "f1": float(f1_score(y_true, predictions, zero_division=0)),
+        "roc_auc": float(roc_auc_score(y_true, probabilities)),
+        "pr_auc": float(
+            average_precision_score(y_true, probabilities)
+        ),
+        "confusion_matrix": confusion_matrix(
+            y_true,
+            predictions,
+        ).tolist(),
+    }
+
+
+def evaluate_readmission_threshold_grid(
+    pipeline: Pipeline,
+    validation_cohort: pd.DataFrame,
+    feature_columns: list[str],
+) -> pd.DataFrame:
+    """
+    Score candidate alert thresholds on validation data only.
+    This is where we make the recall-vs-precision tradeoff.
+    """
+
+    X_validation = validation_cohort[feature_columns].copy()
+    y_validation = validation_cohort["readmit_30d"].copy()
+
+    probabilities = pipeline.predict_proba(X_validation)[:, 1]
+
+    results = []
+
+    for threshold in np.arange(0.10, 0.71, 0.01):
+        predictions = (probabilities >= threshold).astype(int)
+
+        results.append(
+            {
+                "threshold": round(float(threshold), 2),
+                "precision": precision_score(
+                    y_validation,
+                    predictions,
+                    zero_division=0,
+                ),
+                "recall": recall_score(
+                    y_validation,
+                    predictions,
+                    zero_division=0,
+                ),
+                "f1": f1_score(
+                    y_validation,
+                    predictions,
+                    zero_division=0,
+                ),
+            }
+        )
+
+    return pd.DataFrame(results)
+
+
+def select_recall_first_threshold(
+    threshold_results: pd.DataFrame,
+    minimum_recall: float = READMISSION_RECALL_TARGET,
+) -> float:
+    """
+    Pick the highest threshold that still meets the recall goal.
+
+    Higher threshold = fewer false-positive alerts.
+    We therefore choose the highest one that still catches at least
+    the required percentage of true readmissions.
+    """
+
+    valid_thresholds = threshold_results[
+        threshold_results["recall"] >= minimum_recall
+    ]
+
+    if valid_thresholds.empty:
+        raise ValueError(
+            f"No threshold reached recall >= {minimum_recall:.0%}."
+        )
+
+    best_row = valid_thresholds.sort_values(
+        ["threshold", "precision"],
+        ascending=[False, False],
+    ).iloc[0]
+
+    return float(best_row["threshold"])

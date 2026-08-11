@@ -49,13 +49,22 @@ def prepare_unencoded_features(df_experiment: pd.DataFrame) -> pd.DataFrame:
 steps in order:
 
 feature_engineering.py
-raw MIMIC tables → clinical feature table (df_experiment)
+raw MIMIC tables
+→ df_experiment
 
 preprocessing.py
-df_experiment → cleaned, consistently formatted model-ready features
+df_experiment
+→ clean, consistently formatted features
 
 modeling.py
-clean features → train/test split → XGBoost model → metrics
+clean features
+→ train/test split
+→ XGBoost model
+→ metrics
+
+persist.py
+model + feature list + preprocessing metadata + metrics
+→ one saved model bundle (.pkl)
 
 """
 
@@ -110,4 +119,57 @@ def transform_features(
     return df.reindex(
         columns=metadata["encoded_columns"],
         fill_value=0,
+    )
+
+
+
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+
+
+def build_readmission_preprocessor(
+    X_train: pd.DataFrame,
+) -> ColumnTransformer:
+    """
+    Create preprocessing rules using training features only.
+
+    Numeric columns:
+        missing value -> training-set median
+
+    Categorical columns:
+        missing value -> most common training category
+        text category -> one-hot encoded columns
+    """
+
+    categorical_columns = X_train.select_dtypes(
+        include=["object", "string", "category"]
+    ).columns.tolist()
+
+    numeric_columns = X_train.select_dtypes(
+        include=["number", "bool"]
+    ).columns.tolist()
+
+    numeric_pipeline = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+        ]
+    )
+
+    categorical_pipeline = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            (
+                "one_hot",
+                OneHotEncoder(handle_unknown="ignore"),
+            ),
+        ]
+    )
+
+    return ColumnTransformer(
+        transformers=[
+            ("numeric", numeric_pipeline, numeric_columns),
+            ("categorical", categorical_pipeline, categorical_columns),
+        ],
     )
